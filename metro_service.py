@@ -1,6 +1,8 @@
 import requests
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Dict, Optional, List
 from config import get_config
 
@@ -97,8 +99,86 @@ class MetroService:
 
         return "\n".join(lines)
 
+    def format_for_whatsapp(self) -> Optional[str]:
+        """Formatea el estado específicamente para WhatsApp con emojis"""
+        return self.format_for_display()
+
+    def format_problems_only(self) -> Optional[str]:
+        """Formatea solo los problemas - si todo está bien, mensaje corto; si hay problemas, detalle completo"""
+        failed_stations = self.get_failed_stations()
+        if failed_stations is None:
+            return None
+
+        if not failed_stations:
+            return "✅ Metro de Santiago: Todas las líneas operativas"
+
+        # Hay problemas - mostrar detalles
+        lines = ["⚠️ Metro de Santiago - Problemas detectados:"]
+
+        for line_name, stations in failed_stations.items():
+            stations_text = ", ".join(stations)
+            lines.append(f"❌ {line_name}: {stations_text}")
+
+        return "\n".join(lines)
+
+    def get_prometheus_metrics(self) -> Optional[str]:
+        """Genera métricas en formato Prometheus para Grafana"""
+        status = self.get_lines_status()
+        failed_stations = self.get_failed_stations()
+
+        if status is None:
+            return None
+
+        metrics = []
+
+        # Métricas generales
+        total_lines = len(status)
+        operational_lines = sum(1 for s in status.values() if s == "ok")
+        failed_lines = total_lines - operational_lines
+        availability = (operational_lines / total_lines) * 100
+
+        metrics.extend([
+            "# HELP metro_total_lines Total number of metro lines",
+            "# TYPE metro_total_lines gauge",
+            f"metro_total_lines {total_lines}",
+            "",
+            "# HELP metro_operational_lines Number of operational metro lines",
+            "# TYPE metro_operational_lines gauge",
+            f"metro_operational_lines {operational_lines}",
+            "",
+            "# HELP metro_failed_lines Number of failed metro lines",
+            "# TYPE metro_failed_lines gauge",
+            f"metro_failed_lines {failed_lines}",
+            "",
+            "# HELP metro_availability_percentage Metro availability percentage",
+            "# TYPE metro_availability_percentage gauge",
+            f"metro_availability_percentage {availability:.2f}",
+            "",
+            "# HELP metro_line_status Status of individual metro lines (1=ok, 0=fail)",
+            "# TYPE metro_line_status gauge"
+        ])
+
+        # Métricas por línea
+        for line, line_status in status.items():
+            value = 1 if line_status == "ok" else 0
+            metrics.append(f'metro_line_status{{line="{line}"}} {value}')
+
+        # Métricas de estaciones con problemas
+        if failed_stations:
+            metrics.extend([
+                "",
+                "# HELP metro_failed_stations_count Number of failed stations per line",
+                "# TYPE metro_failed_stations_count gauge"
+            ])
+
+            for line, stations in failed_stations.items():
+                metrics.append(f'metro_failed_stations_count{{line="{line}"}} {len(stations)}')
+
+        return "\n".join(metrics)
+
     def get_summary(self) -> Optional[Dict]:
-        """Obtiene un resumen completo del estado del metro"""
+        """Obtiene un resumen completo del estado del metro optimizado para Grafana"""
+        start_time = time.time()
         status = self.get_lines_status()
         failed_stations = self.get_failed_stations()
 
@@ -107,14 +187,43 @@ class MetroService:
 
         total_lines = len(status)
         operational_lines = sum(1 for s in status.values() if s == "ok")
+        failed_lines = total_lines - operational_lines
+
+        # Calcular métricas adicionales para Grafana
+        availability_percentage = (operational_lines / total_lines) * 100
+        response_time = round((time.time() - start_time) * 1000, 2)  # en millisegundos
+
+        # Contar estaciones con problemas
+        total_failed_stations = sum(len(stations) for stations in (failed_stations or {}).values())
+
+        # Estado numérico para Grafana (más fácil para alertas)
+        status_code = 2 if failed_lines == 0 else 1 if failed_lines < total_lines else 0
 
         return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "status": status,
             "failed_stations": failed_stations or {},
-            "summary": {
+            "metrics": {
+                # Métricas principales para dashboards
                 "total_lines": total_lines,
                 "operational_lines": operational_lines,
-                "failed_lines": total_lines - operational_lines,
-                "overall_status": "ok" if operational_lines == total_lines else "partial"
+                "failed_lines": failed_lines,
+                "availability_percentage": round(availability_percentage, 2),
+                "total_failed_stations": total_failed_stations,
+                "response_time_ms": response_time,
+
+                # Estados para alertas Grafana
+                "status_code": status_code,  # 2=ok, 1=partial, 0=critical
+                "overall_status": "ok" if failed_lines == 0 else "partial" if failed_lines < total_lines else "critical",
+
+                # Métricas por línea para paneles individuales
+                "lines_status": {
+                    line: 1 if state == "ok" else 0
+                    for line, state in status.items()
+                }
+            },
+            "summary": {
+                "message": f"{operational_lines}/{total_lines} líneas operativas",
+                "severity": "success" if failed_lines == 0 else "warning" if failed_lines < 3 else "critical"
             }
         }

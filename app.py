@@ -78,6 +78,51 @@ def create_app():
                 "error": "Error interno del servidor"
             }), 500
 
+    @app.route('/metro/whatsapp', methods=['GET'])
+    def get_metro_whatsapp():
+        """Endpoint específico para WhatsApp con emojis - respuesta en texto plano"""
+        try:
+            whatsapp_text = metro_service.format_for_whatsapp()
+            if whatsapp_text is None:
+                return "❌ No se pudo obtener el estado del metro", 503
+
+            # Retorna texto plano directamente
+            return whatsapp_text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+        except Exception as e:
+            app.logger.error(f"Error interno en /metro/whatsapp: {e}")
+            return "❌ Error interno del servidor", 500, {'Content-Type': 'text/plain; charset=utf-8'}
+
+    @app.route('/metro/problems', methods=['GET'])
+    def get_metro_problems():
+        """Endpoint que solo muestra problemas - texto plano"""
+        try:
+            problems_text = metro_service.format_problems_only()
+            if problems_text is None:
+                return "❌ No se pudo obtener el estado del metro", 503
+
+            # Retorna texto plano directamente
+            return problems_text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+        except Exception as e:
+            app.logger.error(f"Error interno en /metro/problems: {e}")
+            return "❌ Error interno del servidor", 500, {'Content-Type': 'text/plain; charset=utf-8'}
+
+    @app.route('/metrics', methods=['GET'])
+    def get_prometheus_metrics():
+        """Endpoint de métricas Prometheus para Grafana"""
+        try:
+            metrics_text = metro_service.get_prometheus_metrics()
+            if metrics_text is None:
+                return "# No metrics available", 503, {'Content-Type': 'text/plain; charset=utf-8'}
+
+            # Retorna métricas en formato Prometheus
+            return metrics_text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+        except Exception as e:
+            app.logger.error(f"Error interno en /metrics: {e}")
+            return "# Error generating metrics", 500, {'Content-Type': 'text/plain; charset=utf-8'}
+
     @app.errorhandler(404)
     def not_found(error):
         return jsonify({
@@ -86,7 +131,10 @@ def create_app():
                 "/health",
                 "/metro",
                 "/metro/summary",
-                "/metro/display"
+                "/metro/display",
+                "/metro/whatsapp",
+                "/metro/problems",
+                "/metrics"
             ]
         }), 404
 
